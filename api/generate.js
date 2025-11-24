@@ -64,7 +64,7 @@ Respond in a helpful, calm, and authoritative manner. Keep responses concise but
     }
 
     const aiResponse = await client.chat({
-      model: "command-r-plus",
+      model: "command-a-reasoning-08-2025",
       message,
       chatHistory,
       preamble: systemContext,
