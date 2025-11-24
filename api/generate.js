@@ -69,8 +69,9 @@ Respond in a helpful, calm, and authoritative manner. Keep responses concise but
     });
 
     // v2 API returns: response.message.content[n].text
-    const botText =
-      aiResponse?.message?.content?.[0]?.text || null;
+    const contentArr = aiResponse?.message?.content || [];
+    const textObj = contentArr.find(c => c.type === "text");
+    const botText = textObj?.text || null;
 
     if (!botText) {
       console.error("Invalid Cohere response:", aiResponse);
