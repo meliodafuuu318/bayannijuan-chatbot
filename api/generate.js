@@ -16,76 +16,72 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { topic, difficulty, count } = req.body;
+  const { message, conversationHistory = [] } = req.body;
 
-  // Adjust prompt based on the difficulty level
-  let difficultyDescription = "";
-
-  switch (difficulty.toLowerCase()) {
-    case "easy":
-      difficultyDescription = `primary school level, simpler language and basic concepts`;
-      break;
-    case "medium":
-      difficultyDescription = `high school level, more advanced but still general`;
-      break;
-    case "hard":
-      difficultyDescription = `college level, more complex concepts and in-depth details`;
-      break;
-    default:
-      return res.status(400).json({ error: "Invalid difficulty level" });
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ error: "Message is required" });
   }
 
-  const prompt = `Generate exactly ${count} unique and diverse multiple-choice questions on the topic "${topic}" at a ${difficultyDescription}.
-  Ensure that:
-  - Each question covers a different subtopic or angle within "${topic}"
-  - No two questions should be similar or redundant
-  - All questions must be original and not commonly found in basic quiz banks
-  
-  Each question must be returned as an object with exactly these keys:
-  - "question": a string with the question
-  - "options": an array of 4 distinct answer choices
-  - "correct_index": the index (0-3) of the correct answer in the options array
-  
-  Respond only with a strict JSON array like this:
-  [
-    {
-      "question": "What is...",
-      "options": ["A", "B", "C", "D"],
-      "correct_index": 2
-    }
-  ]`;
+  // System context for disaster preparedness
+  const systemContext = `You are "Mang Juan", an AI assistant specializing in disaster preparedness, response, and recovery for the Philippines. Your role is to:
 
+1. Help people prepare for natural disasters (typhoons, floods, earthquakes, etc.)
+2. Provide accurate emergency response guidance
+3. Offer recovery and relief information
+4. Share safety protocols and evacuation procedures
+
+CRITICAL GUIDELINES:
+- Only provide information from official sources like:
+  * NDRRMC (National Disaster Risk Reduction and Management Council)
+  * PAGASA (Philippine Atmospheric, Geophysical and Astronomical Services Administration)
+  * Philippine Red Cross
+  * Local Government Units (LGUs)
+  * WHO and CDC for health-related disasters
+  * PHIVOLCS for earthquakes and volcanic activity
+  
+- Always cite your sources when providing specific statistics, warnings, or protocols
+- If you don't have verified information, clearly state that and recommend contacting official authorities
+- Prioritize life-saving information and immediate safety
+- Use simple, clear Filipino-English (Taglish) when appropriate for better understanding
+- Never provide unverified rumors or speculation
+- In emergencies, always remind users to call official hotlines: 911 (NDRRMC), 143 (Red Cross)
+
+Respond in a helpful, calm, and authoritative manner. Keep responses concise but complete.`;
 
   try {
+    // Build conversation history for context
+    const chatHistory = conversationHistory.map(msg => ({
+      role: msg.role === 'user' ? 'USER' : 'CHATBOT',
+      message: msg.content
+    }));
+
     const response = await client.chat({
       model: "command-r-plus",
-      message: prompt,
-      temperature: 0.7,
+      message: message,
+      chatHistory: chatHistory,
+      preamble: systemContext,
+      temperature: 0.3, // Lower temperature for more factual, consistent responses
+      connectors: [{ id: "web-search" }], // Enable web search for official sources
     });
 
-    const rawText = response.text ?? response.body?.generations?.[0]?.text;
+    const botResponse = response.text || response.message;
 
-    if (!rawText) {
-      return res.status(500).json({ error: "Invalid response format from Cohere" });
+    if (!botResponse) {
+      return res.status(500).json({ error: "Invalid response from AI" });
     }
 
-    const jsonStart = rawText.indexOf("[");
-    const jsonEnd = rawText.lastIndexOf("]") + 1;
-    const jsonText = rawText.substring(jsonStart, jsonEnd);
+    // Return the response with metadata
+    return res.status(200).json({
+      response: botResponse,
+      sources: response.citations || [], // Include any citations if available
+      timestamp: new Date().toISOString()
+    });
 
-    let flashcards = JSON.parse(jsonText);
-
-    // Filter only valid flashcard objects
-    flashcards = flashcards.filter(item =>
-      item &&
-      typeof item.question === 'string' &&
-      Array.isArray(item.options) &&
-      item.options.length === 4 &&
-      typeof item.correct_index === 'number'
-    );
-
-    return res.status(200).json(flashcards);
   } catch (error) {
-    return res.status(500).json({ error: "Failed to generate flashcards" });
+    console.error("Chatbot error:", error);
+    return res.status(500).json({ 
+      error: "Failed to generate response",
+      fallback: "I'm having trouble connecting right now. Please try again or contact emergency services at 911 for urgent assistance."
+    });
   }
 }
