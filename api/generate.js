@@ -1,28 +1,27 @@
-import { CohereClient } from "cohere-ai";
-
-// Initialize the Cohere client with your API key
-const client = new CohereClient({ apiKey: process.env.CO_API_KEY });
-
+// api/generate.js (or .ts depending on your app)
+import { CohereClient } from "cohere-ai"; // ensure this is installed
 export default async function handler(req, res) {
+  // Basic CORS handling
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  // Validate environment
+  const API_KEY = process.env.CO_API_KEY;
+  if (!API_KEY) {
+    console.error('Missing CO_API_KEY in environment');
+    return res.status(500).json({ error: "Server misconfiguration: missing API key" });
   }
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  const { message, conversationHistory = [] } = req.body;
-
-  if (!message || typeof message !== 'string') {
+  const { message, conversationHistory = [] } = req.body || {};
+  if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "Message is required" });
   }
 
-  // System context for disaster preparedness
+  // Build clearer system prompt/preamble if needed
   const systemContext = `You are "Mang Juan", an AI assistant specializing in disaster preparedness, response, and recovery for the Philippines. Your role is to:
 
 1. Help people prepare for natural disasters (typhoons, floods, earthquakes, etc.)
@@ -49,39 +48,44 @@ CRITICAL GUIDELINES:
 Respond in a helpful, calm, and authoritative manner. Keep responses concise but complete.`;
 
   try {
-    // Build conversation history for context
-    const chatHistory = conversationHistory.map(msg => ({
-      role: msg.role === 'user' ? 'USER' : 'CHATBOT',
-      message: msg.content
+    const client = new CohereClient({ apiKey: API_KEY });
+
+    // Build chatHistory for SDK if required by your SDK signature:
+    const chatHistory = (conversationHistory || []).map(msg => ({
+      role: msg.role === 'user' ? 'USER' : 'ASSISTANT',
+      content: msg.content
     }));
 
-    const response = await client.chat({
-      model: "command-r-plus",
-      message: message,
-      chatHistory: chatHistory,
-      preamble: systemContext,
-      temperature: 0.3, // Lower temperature for more factual, consistent responses
-      connectors: [{ id: "web-search" }], // Enable web search for official sources
-    });
-
-    const botResponse = response.text || response.message;
-
-    if (!botResponse) {
-      return res.status(500).json({ error: "Invalid response from AI" });
+    // If your installed SDK uses a different method name, update accordingly.
+    // Here's a defensive approach that checks for `client.chat` availability:
+    if (typeof client.chat !== 'function') {
+      console.error('Cohere client.chat not available. SDK version mismatch?');
+      return res.status(500).json({ error: 'Cohere SDK: client.chat not available on server' });
     }
 
-    // Return the response with metadata
-    return res.status(200).json({
-      response: botResponse,
-      sources: response.citations || [], // Include any citations if available
-      timestamp: new Date().toISOString()
+    const aiResponse = await client.chat({
+      model: "command-r-plus",
+      message,
+      chatHistory,
+      preamble: systemContext,
+      temperature: 0.3
     });
 
-  } catch (error) {
-    console.error("Chatbot error:", error);
-    return res.status(500).json({ 
-      error: "Failed to generate response",
-      fallback: "I'm having trouble connecting right now. Please try again or contact emergency services at 911 for urgent assistance."
+    // aiResponse may have different shape depending on SDK; attempt common fields:
+    const botText = aiResponse?.text || aiResponse?.response || aiResponse?.message || null;
+    if (!botText) {
+      console.error('Invalid AI response shape', JSON.stringify(aiResponse));
+      return res.status(502).json({ error: "Invalid response from AI provider", details: aiResponse });
+    }
+
+    return res.status(200).json({ response: botText, timestamp: new Date().toISOString() });
+  } catch (err) {
+    // Very important: log full error server-side (Vercel logs)
+    console.error('Handler error:', err && err.stack ? err.stack : err);
+    // Return safe message + include err.message to help debugging (not sensitive)
+    return res.status(500).json({
+      error: "AI generation failed",
+      message: err?.message || String(err)
     });
   }
 }
